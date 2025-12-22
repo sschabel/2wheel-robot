@@ -5,6 +5,12 @@ from drive import Drive
 from utime import sleep_ms
 import sys
 import uselect
+import network
+import secrets
+
+wlan = network.WLAN(network.STA_IF)
+wlan.active(True)
+wlan.connect(secrets.SSID, secrets.PASSWORD)
 
 min_duty_cycle = 15000
 max_duty_cycle = 65535
