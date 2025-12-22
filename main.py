@@ -1,16 +1,41 @@
-import machine
-from machine import Pin, PWM
 from dcmotor import DCMotor
 from drive import Drive
-from utime import sleep_ms
-import sys
-import uselect
+from machine import Pin, PWM
 import network
 import secrets
+import socket
+import sys
+import uselect
+from utime import sleep_ms
 
+# Used the following Raspberry Pi Article to create the Web Server:
+# https://www.raspberrypi.com/news/how-to-run-a-webserver-on-raspberry-pi-pico-w/
 wlan = network.WLAN(network.STA_IF)
 wlan.active(True)
 wlan.connect(secrets.SSID, secrets.PASSWORD)
+
+max_wait = 10
+while max_wait > 0:
+    if wlan.status() < 0 or wlan.status() >= 3:
+        break
+    max_wait -= 1
+    print('Waiting for network connection...')
+    sleep_ms(1000)
+
+if wlan.status() != 3:
+    print(str(wlan.status()) + ' network status.')
+    raise RuntimeError('Network connection failed!')
+else:
+    print('Connected successfully to the network!')
+    status = wlan.ifconfig()
+    print( 'ip = ' + status[0] )
+
+addr = socket.getaddrinfo('0.0.0.0', 80)[0][-1]
+
+s = socket.socket()
+s.bind(addr)
+s.listen(1)
+print('Listening on', addr)
 
 min_duty_cycle = 15000
 max_duty_cycle = 65535
@@ -31,32 +56,69 @@ drive = Drive(rightWheel, leftWheel)
 poll = uselect.poll()
 poll.register(sys.stdin, uselect.POLLIN)
 
-def read_keyboard_input():
-    # Check if an event has occurred on the registered streams with a 0ms timeout (non-blocking)
-    if poll.poll(0):
-        key = sys.stdin.read(1) # reads 1 character
-        return key
-    return None
-
-print("Press 'q' to exit")
+# Listen for connections
 while True:
-    char = read_keyboard_input()
-    if char is not None:
-        print(f"You pressed: {repr(char)}")
-        if char == 'q':
-            break
-        if char == 'w':
+    try:
+        cl, addr = s.accept()
+        print('client connected from', addr)
+        request = cl.recv(1024)
+        print(request)
+
+        request = str(request)
+        ping_request = request.find('/drive/ping')
+        forward_request = request.find('/drive/forward')
+        reverse_request = request.find('/drive/reverse')
+        right_request = request.find('/drive/right')
+        left_request = request.find('/drive/left')
+        stop_request = request.find('/drive/stop')
+
+        print('ping_request = ' + str(ping_request))
+        print('forward_request = ' + str(forward_request))
+        print('reverse_request = ' + str(reverse_request))
+        print('right_request = ' + str(right_request))
+        print('left_request = ' + str(left_request))
+        print('stop_request = ' + str(stop_request))
+
+        lastState = None
+
+        if ping_request == 6:
+            print("Ping request!")
+            lastState = "ping"
+
+        if forward_request == 6:
+            print("Forward request!")
             drive.forward(50)
-        if char == 's':
+            lastState = "forward"
+
+        if reverse_request == 6:
+            print("Reverse request!")
             drive.reverse(50)
-        if char == 'd':
+            lastState = "reverse"
+
+        if right_request == 6:
+            print("Right request!")
             drive.right(50)
-        if char == 'a':
+            lastState = "right"
+
+        if left_request == 6:
+            print("Left request!")
             drive.left(50)
-        if char == ' ':
+            lastState = "left"
+
+        if stop_request == 6:
+            print("Stop request!")
             drive.stop()
-        sleep_ms(100)
-    else:
-        drive.stop()
+            lastState = "stop"
+
+        responseBody = '{ "lastState": "' + lastState + '"}'
+        print('Response Body: ' + responseBody)
+
+        cl.send('HTTP/1.0 200 OK\r\nContent-type: application/json\r\n\r\n')
+        cl.send(responseBody)
+        cl.close()
+
+    except OSError as e:
+        cl.close()
+        print('Network connection closed!')
 
     sleep_ms(100)
