@@ -1,41 +1,12 @@
+import asyncio
+
 from dcmotor import DCMotor
 from drive import Drive
 from machine import Pin, PWM
-import network
-import secrets
-import socket
+import aioble
+import bluetooth
 import sys
 import uselect
-from utime import sleep_ms
-
-# Used the following Raspberry Pi Article to create the Web Server:
-# https://www.raspberrypi.com/news/how-to-run-a-webserver-on-raspberry-pi-pico-w/
-wlan = network.WLAN(network.STA_IF)
-wlan.active(True)
-wlan.connect(secrets.SSID, secrets.PASSWORD)
-
-max_wait = 10
-while max_wait > 0:
-    if wlan.status() < 0 or wlan.status() >= 3:
-        break
-    max_wait -= 1
-    print('Waiting for network connection...')
-    sleep_ms(1000)
-
-if wlan.status() != 3:
-    print(str(wlan.status()) + ' network status.')
-    raise RuntimeError('Network connection failed!')
-else:
-    print('Connected successfully to the network!')
-    status = wlan.ifconfig()
-    print( 'ip = ' + status[0] )
-
-addr = socket.getaddrinfo('0.0.0.0', 80)[0][-1]
-
-s = socket.socket()
-s.bind(addr)
-s.listen(1)
-print('Listening on', addr)
 
 min_duty_cycle = 15000
 max_duty_cycle = 65535
@@ -56,69 +27,65 @@ drive = Drive(rightWheel, leftWheel)
 poll = uselect.poll()
 poll.register(sys.stdin, uselect.POLLIN)
 
-# Listen for connections
-while True:
-    try:
-        cl, addr = s.accept()
-        print('client connected from', addr)
-        request = cl.recv(1024)
-        print(request)
+# NUS UUIDs
+_UART_UUID = bluetooth.UUID('6E400001-B5A3-F393-E0A9-E50E24DCCA9E')
+_UART_TX_UUID = bluetooth.UUID('6E400003-B5A3-F393-E0A9-E50E24DCCA9E')
+_UART_RX_UUID = bluetooth.UUID('6E400002-B5A3-F393-E0A9-E50E24DCCA9E')
 
-        request = str(request)
-        ping_request = request.find('/drive/ping')
-        forward_request = request.find('/drive/forward')
-        reverse_request = request.find('/drive/reverse')
-        right_request = request.find('/drive/right')
-        left_request = request.find('/drive/left')
-        stop_request = request.find('/drive/stop')
+# Register GATT server
+uart_service = aioble.Service(_UART_UUID)
+tx_characteristic = aioble.Characteristic(
+    uart_service, _UART_TX_UUID, read=True, notify=True
+)
+rx_characteristic = aioble.Characteristic(
+    uart_service, _UART_RX_UUID, write=True, capture=True
+)
+aioble.register_services(uart_service)
 
-        print('ping_request = ' + str(ping_request))
-        print('forward_request = ' + str(forward_request))
-        print('reverse_request = ' + str(reverse_request))
-        print('right_request = ' + str(right_request))
-        print('left_request = ' + str(left_request))
-        print('stop_request = ' + str(stop_request))
+def control_car(cmd):
+    if cmd == 'ping':
+        print("Ping request!")
 
-        lastState = None
+    if cmd == 'forward':
+        print("Forward request!")
+        drive.forward(100)
 
-        if ping_request == 6:
-            print("Ping request!")
-            lastState = "ping"
+    if cmd == 'reverse':
+        print("Reverse request!")
+        drive.reverse(100)
 
-        if forward_request == 6:
-            print("Forward request!")
-            drive.forward(100)
-            lastState = "forward"
+    if cmd == 'right':
+        print("Right request!")
+        drive.right(75)
 
-        if reverse_request == 6:
-            print("Reverse request!")
-            drive.reverse(100)
-            lastState = "reverse"
+    if cmd == 'left':
+        print("Left request!")
+        drive.left(75)
 
-        if right_request == 6:
-            print("Right request!")
-            drive.right(75)
-            lastState = "right"
+    if cmd == 'stop':
+        print("Stop request!")
+        drive.stop()
 
-        if left_request == 6:
-            print("Left request!")
-            drive.left(75)
-            lastState = "left"
+# Serially wait for connections. Don't advertise while a central is connected.
+async def peripheral_task():
+    while True:
+        async with await aioble.advertise(
+            100_000,  # advertising interval (us)
+            name="RCCar",
+            services=[_UART_UUID],
+        ) as connection:
+            print("Connection from", connection.device)
 
-        if stop_request == 6:
-            print("Stop request!")
-            drive.stop()
-            lastState = "stop"
+            async def handle_rx():
+                while True:
+                    _, value = await rx_characteristic.written()
+                    cmd = value.decode('utf-8').strip()
+                    print("Received command:", cmd)
+                    control_car(cmd)
 
-        responseBody = '{ "lastState": "' + lastState + '"}'
-        print('Response Body: ' + responseBody)
+            rx_task = asyncio.create_task(handle_rx())
+            await connection.disconnected()
+            rx_task.cancel()
+            print("Disconnected")
 
-        cl.send('HTTP/1.0 200 OK\r\nContent-type: application/json\r\n\r\n')
-        cl.send(responseBody)
-        cl.close()
-
-    except OSError as e:
-        cl.close()
-        print('Network connection closed!')
-
-    sleep_ms(100)
+asyncio.run(peripheral_task())
