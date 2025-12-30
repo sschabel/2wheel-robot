@@ -87,22 +87,22 @@ while True:
 
         if forward_request == 6:
             print("Forward request!")
-            drive.forward(50)
+            drive.forward(100)
             lastState = "forward"
 
         if reverse_request == 6:
             print("Reverse request!")
-            drive.reverse(50)
+            drive.reverse(100)
             lastState = "reverse"
 
         if right_request == 6:
             print("Right request!")
-            drive.right(50)
+            drive.right(75)
             lastState = "right"
 
         if left_request == 6:
             print("Left request!")
-            drive.left(50)
+            drive.left(75)
             lastState = "left"
 
         if stop_request == 6:
